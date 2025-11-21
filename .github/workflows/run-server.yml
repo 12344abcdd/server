@@ -39,16 +39,6 @@ jobs:
           nohup ./gradlew runserver > server.log 2>&1 &
           echo "Server process started in background."
 
-      - name: Wait for Server to Start
-        run: |
-          echo "Waiting for Minecraft server to finish initialization..."
-          until grep -q "Done" server.log; do
-            sleep 5
-            echo "Still waiting..."
-            tail -n 10 server.log
-          done
-          echo "Minecraft server has started successfully!"
-          tail -n 20 server.log
 
       - name: Expose Port with localtunnel
         run: |
