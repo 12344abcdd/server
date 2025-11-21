@@ -63,7 +63,7 @@ jobs:
           git config --global user.email "actions@github.com"
           
           # 添加所有生成的配置文件（包括子目录和新文件）
-          git add server-configs/
+          git add *
           
           # 检查是否有变更（避免空提交）
           if git diff --quiet --exit-code --cached; then
