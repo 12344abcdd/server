@@ -1,12 +1,9 @@
-name: Run Server and Commit Configs
-
+name: Run Server and Commit All Configs
 on:
   workflow_dispatch:
-
 jobs:
   run-server:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -21,14 +18,15 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Clean previous run directory
-        run: rm -rf run
+        run: rm -rf run server-configs
         continue-on-error: true
 
-      - name: Initialize server files (generate configs)
+      - name: Initialize server files (generate all configs)
         run: |
-          echo "Initializing server to generate config files..."
+          echo "Initializing server to generate all config files..."
+          # 首次运行生成所有配置文件（eula.txt、server.properties 等）
           ./gradlew runserver || true
-          echo "Server files generated."
+          echo "All server files generated in run/server/"
 
       - name: Install localtunnel
         run: npm install -g localtunnel
@@ -37,51 +35,59 @@ jobs:
         run: |
           echo "Starting Minecraft server with ./gradlew runserver..."
           nohup ./gradlew runserver > server.log 2>&1 &
-          echo "Server process started in background."
-
+          echo "Server process started in background. Logs: server.log"
 
       - name: Expose Port with localtunnel
         run: |
-          echo "Starting localtunnel..."
+          echo "Starting localtunnel for port 25565..."
           nohup lt --port 25565 > lt.log 2>&1 &
           sleep 10
+          
+          # 提取并输出可访问地址
           LT_URL=$(grep -o 'https://[a-zA-Z0-9.-]*\.loca\.lt' lt.log | head -n 1)
           if [ -z "$LT_URL" ]; then
-            echo "Error: Failed to retrieve localtunnel URL."
+            echo "Error: Failed to get localtunnel URL"
             cat lt.log
             exit 1
           fi
+          
           echo "=================================================="
-          echo "Server is accessible at:"
+          echo "✅ Server Access URL:"
           echo "$LT_URL"
           echo "=================================================="
 
-      - name: Commit and push config files
+      - name: Commit and push ALL config files
         run: |
-          # 配置 Git
+          # 配置 Git 身份
           git config --global user.name "GitHub Actions Bot"
           git config --global user.email "actions@github.com"
-
-          # 检查是否有更改
+          
+          # 添加所有生成的配置文件（包括子目录和新文件）
           git add server-configs/
-          git diff --quiet --exit-code --cached || (
-            echo "Changes detected. Committing and pushing..."
-            git commit -m "Auto-update server configs (eula.txt, server.properties)"
-            # 使用 GITHUB_TOKEN 推送
+          
+          # 检查是否有变更（避免空提交）
+          if git diff --quiet --exit-code --cached; then
+            echo "No changes to config files. Skipping commit."
+          else
+            echo "Committing all config files..."
+            git commit -m "Auto-commit all server configs (eula.txt, server.properties, etc.)"
+            # 安全推送（使用 GITHUB_TOKEN 无需额外授权）
             git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git HEAD:${{ github.ref_name }}
-          )
+            echo "✅ All config files pushed to repository!"
+          fi
 
       - name: Keep Workflow Alive
         run: |
-          echo "Workflow is now keeping the server running."
-          echo "To stop the server, please cancel this workflow run."
+          echo "🔄 Workflow is keeping the server running..."
+          echo "⚠️ To stop the server: Cancel this workflow run in GitHub Actions"
+          # 捕获终止信号，优雅清理
           trap 'echo "Cleaning up..."; pkill -f gradle; pkill -f lt; exit 0' SIGINT SIGTERM
           while true; do sleep 3600; done
 
-      - name: Post-Cleanup
+      - name: Post-Cleanup (无论成功失败都执行)
         if: always()
         run: |
-          echo "Post-run cleanup..."
+          echo "🧹 Post-run cleanup..."
           pkill -f gradle
           pkill -f lt
-          echo "Post-run cleanup complete."
+          echo "Cleanup complete!"
