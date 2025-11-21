@@ -1,5 +1,5 @@
-[12:42:56] [main/INFO] (FabricLoader/GameProvider) Loading Minecraft 1.21.10 with Fabric Loader 0.17.3
-[12:42:57] [main/INFO] (FabricLoader) Loading 43 mods:
+[12:48:21] [main/INFO] (FabricLoader/GameProvider) Loading Minecraft 1.21.10 with Fabric Loader 0.17.3
+[12:48:22] [main/INFO] (FabricLoader) Loading 43 mods:
 	- fabric-api 0.136.0+1.21.10
 	- fabric-api-base 1.0.0+14b92d896f
 	- fabric-api-lookup-api-v1 1.6.106+d17682156f
@@ -43,9 +43,9 @@
 	- minecraft 1.21.10
 	- mixinextras 0.5.0
 	- modid 1.0.0
-[12:42:57] [main/INFO] (FabricLoader/Mixin) SpongePowered MIXIN Subsystem Version=0.8.7 Source=file:/home/runner/.gradle/caches/modules-2/files-2.1/net.fabricmc/sponge-mixin/0.16.5+mixin.0.8.7/80fc3a9f592673cea87f4cd702f87991c6c9fe4d/sponge-mixin-0.16.5+mixin.0.8.7.jar Service=Knot/Fabric Env=SERVER
-[12:42:57] [main/INFO] (FabricLoader/Mixin) Loaded Fabric development mappings for mixin remapper!
-[12:42:57] [main/INFO] (FabricLoader/Mixin) Compatibility level set to JAVA_21
-[12:42:58] [main/INFO] (FabricLoader/MixinExtras|Service) Initializing MixinExtras via com.llamalad7.mixinextras.service.MixinExtrasServiceImpl(version=0.5.0).
-[12:43:04] [main/INFO] (modid) Hello Fabric world!
-[12:43:05] [main/INFO] (Minecraft) You need to agree to the EULA in order to run the server. Go to eula.txt for more info.
+[12:48:22] [main/INFO] (FabricLoader/Mixin) SpongePowered MIXIN Subsystem Version=0.8.7 Source=file:/home/runner/.gradle/caches/modules-2/files-2.1/net.fabricmc/sponge-mixin/0.16.5+mixin.0.8.7/80fc3a9f592673cea87f4cd702f87991c6c9fe4d/sponge-mixin-0.16.5+mixin.0.8.7.jar Service=Knot/Fabric Env=SERVER
+[12:48:22] [main/INFO] (FabricLoader/Mixin) Loaded Fabric development mappings for mixin remapper!
+[12:48:22] [main/INFO] (FabricLoader/Mixin) Compatibility level set to JAVA_21
+[12:48:23] [main/INFO] (FabricLoader/MixinExtras|Service) Initializing MixinExtras via com.llamalad7.mixinextras.service.MixinExtrasServiceImpl(version=0.5.0).
+[12:48:29] [main/INFO] (modid) Hello Fabric world!
+[12:48:30] [main/INFO] (Minecraft) You need to agree to the EULA in order to run the server. Go to eula.txt for more info.
