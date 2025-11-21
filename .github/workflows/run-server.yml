@@ -30,23 +30,6 @@ jobs:
           ./gradlew runserver || true
           echo "Server files generated."
 
-      - name: Accept EULA and configure server
-        run: |
-          # 移动或复制生成的配置文件到仓库根目录（或你希望的位置）
-          # 这里我们将它们复制到一个名为 'server-configs' 的新目录中
-          mkdir -p server-configs
-          cp run/server/eula.txt server-configs/
-          cp run/server/server.properties server-configs/
-
-          # 修改 EULA
-          sed -i 's/eula=false/eula=true/' server-configs/eula.txt
-          echo "EULA accepted and files copied."
-
-          # 修改 server.properties (例如，设置 online-mode 为 false)
-          sed -i.bak 's/online-mode=true/online-mode=false/' server-configs/server.properties
-          rm server-configs/server.properties.bak
-          echo "Server properties configured."
-
       - name: Install localtunnel
         run: npm install -g localtunnel
 
