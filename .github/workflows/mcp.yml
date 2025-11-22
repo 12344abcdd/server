@@ -1,59 +1,56 @@
 name: Minecraft 自动反编译
 on:
   push:
-    branches: [main]  # 推送代码时触发（可改为 schedule 定时执行）
-  workflow_dispatch:  # 允许手动触发
+    branches: [main]
+  workflow_dispatch:
 
 jobs:
   decompile:
     runs-on: ubuntu-latest
     steps:
-      # 1. 安装基础依赖（JDK 8、unzip）
+      # 1. 修复：移除Maven缓存，仅安装JDK 8（无需缓存，因无Maven项目）
       - name: 配置基础环境
         uses: actions/setup-java@v4
         with:
           java-version: '8'
           distribution: 'temurin'
-          cache: maven
+          # 删掉 cache: maven 这行，避免查找pom.xml
+
       - run: sudo apt-get update && sudo apt-get install -y unzip wget
 
-      # 2. 下载MCP工具包+1.12.2映射文件
+      # 2. 新增：检查当前目录结构（可选，用于调试）
+      - name: 查看工作目录
+        run: ls -la /home/runner/work/server/server/
+
+      # 后续步骤不变，保持原下载、配置、反编译逻辑
       - name: 下载MCP及依赖
         run: |
-          # 下载MCP940基础包
           wget http://www.modcoderpack.com/files/mcp940.zip -O mcp.zip
           unzip -q mcp.zip -d mcp
-          # 下载1.12.2 SRG映射文件
           wget http://files.minecraftforge.net/maven/de/oceanlabs/mcp/mcp/1.12.2/mcp-1.12.2-srg.zip -O srg.zip
           unzip -q srg.zip -d mcp/conf
-          # 下载MCP映射表
           wget https://github.com/modcoderpack/mcp-mappings-archive/raw/master/mcp_stable/1.12/mcp-1.12-stable.zip -O mappings.zip
           unzip -q mappings.zip -d mcp/conf
 
-      # 3. 配置MCP版本为1.12.2
       - name: 修改MCP版本配置
         run: |
           cd mcp
           sed -i 's/version=1.12/version=1.12.2/g' conf/version.cfg
           sed -i 's/srg\.version=1.12/srg.version=1.12.2/g' conf/version.cfg
 
-      # 4. 下载Minecraft 1.12.2客户端JAR
       - name: 下载MC客户端
         run: |
-          # 从可靠镜像下载1.12.2客户端（需确认链接有效性，可替换为自己的镜像）
           wget https://launcher.mojang.com/v1/objects/886945bfb2b978778c3a0288fd67b85603676e8/client.jar -O mcp/jars/minecraft.jar
 
-      # 5. 执行反编译（调用MCP的decompile脚本）
       - name: 运行反编译
         run: |
           cd mcp
           chmod +x decompile.sh
-          ./decompile.sh  # Linux脚本，Windows需用decompile.bat（但GitHub Actions推荐Ubuntu）
+          ./decompile.sh
 
-      # 6. 归档反编译后的源代码（可在GitHub Actions页面下载）
       - name: 归档输出结果
         uses: actions/upload-artifact@v4
         with:
           name: mc-1.12.2-source
-          path: mcp/src/minecraft/  # 反编译后的源代码目录
-          retention-days: 30  # 保留30天
+          path: mcp/src/minecraft/
+          retention-days: 30
