@@ -16,19 +16,18 @@ jobs:
 
       - run: sudo apt-get update && sudo apt-get install -y unzip wget
 
-      # 修复：unzip加-o强制覆盖，wget加-c断点续传（避免下载中断）
-      - name: 下载MCP及依赖（优化下载+解压）
+      - name: 下载MCP及依赖（修复映射表链接）
         run: |
           # 下载MCP基础包（断点续传）
           wget -c http://www.modcoderpack.com/files/mcp940.zip -O mcp.zip
-          unzip -q -o mcp.zip -d mcp  # -o强制覆盖，无交互
+          unzip -q -o mcp.zip -d mcp
           
           # 下载SRG映射文件
           wget -c http://files.minecraftforge.net/maven/de/oceanlabs/mcp/mcp/1.12.2/mcp-1.12.2-srg.zip -O srg.zip
-          unzip -q -o srg.zip -d mcp/conf  # 强制覆盖冲突文件
+          unzip -q -o srg.zip -d mcp/conf
           
-          # 下载MCP映射表
-          wget -c https://github.com/modcoderpack/mcp-mappings-archive/raw/master/mcp_stable/1.12/mcp-1.12-stable.zip -O mappings.zip
+          # 修复：替换为1.12.2可用的MCP映射表（Forge官方仓库，稳定有效）
+          wget -c https://files.minecraftforge.net/maven/de/oceanlabs/mcp/mcp/1.12.2/mcp-1.12.2.zip -O mappings.zip
           unzip -q -o mappings.zip -d mcp/conf
 
       - name: 修改MCP版本配置
@@ -37,17 +36,16 @@ jobs:
           sed -i 's/version=1.12/version=1.12.2/g' conf/version.cfg
           sed -i 's/srg\.version=1.12/srg.version=1.12.2/g' conf/version.cfg
 
-      - name: 下载MC客户端（加超时重试）
+      - name: 下载MC客户端（超时重试）
         run: |
           wget -c --timeout=30 --tries=3 https://launcher.mojang.com/v1/objects/886945bfb2b978778c3a0288fd67b85603676e8/client.jar -O mcp/jars/minecraft.jar
 
-      - name: 运行反编译（输出详细日志，便于调试）
+      - name: 运行反编译（输出详细日志）
         run: |
           cd mcp
           chmod +x decompile.sh
-          ./decompile.sh 2>&1 | tee decompile.log  # 日志重定向到文件
+          ./decompile.sh 2>&1 | tee decompile.log
 
-      # 新增：归档反编译日志，失败时可查看原因
       - name: 归档反编译日志
         uses: actions/upload-artifact@v4
         with:
