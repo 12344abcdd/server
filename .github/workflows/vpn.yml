@@ -1,45 +1,87 @@
-name: Temporary SSH via Cloudflare Tunnel
+name: Temporary WireGuard VPN Server
 on:
   workflow_dispatch:  # 手动触发工作流
 
 jobs:
-  deploy-ssh-tunnel:
+  deploy-vpn-server:
     runs-on: ubuntu-latest
     steps:
-      - name: Install SSH Server
+      - name: Install required dependencies
         run: |
-          sudo apt update -y && sudo apt install -y openssh-server jq
-          # 创建普通用户，避免root权限限制
-          sudo useradd -m sshuser
-          echo "sshuser:TempSSH@123456" | sudo chpasswd
-          sudo usermod -aG sudo sshuser
-          # 开启密码登录
-          sudo sed -i -e 's/#PasswordAuthentication yes/PasswordAuthentication yes/' -e 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
-          sudo service ssh restart
+          sudo apt update && sudo apt install -y wireguard jq
+          # 下载 ngrok v3（支持 UDP 协议）
+          wget https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
+          tar -xvzf ngrok-v3-stable-linux-amd64.tgz
+          sudo mv ngrok /usr/local/bin/
+          chmod +x /usr/local/bin/ngrok
 
-      - name: Install Cloudflared
+      - name: Generate WireGuard key pair and config
         run: |
-          # 下载并安装 cloudflared
-          wget https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O cloudflared
-          chmod +x cloudflared
-          sudo mv cloudflared /usr/local/bin/
+          # 生成服务端密钥
+          sudo mkdir -p /etc/wireguard
+          wg genkey | sudo tee /etc/wireguard/server_private.key | wg pubkey | sudo tee /etc/wireguard/server_public.key
+          wg genkey | sudo tee /etc/wireguard/client_private.key | wg pubkey | sudo tee /etc/wireguard/client_public.key
+          
+          # 读取密钥内容
+          SERVER_PRIV=$(sudo cat /etc/wireguard/server_private.key)
+          SERVER_PUB=$(sudo cat /etc/wireguard/server_public.key)
+          CLIENT_PRIV=$(sudo cat /etc/wireguard/client_private.key)
+          CLIENT_PUB=$(sudo cat /etc/wireguard/client_public.key)
+          
+          # 配置服务端 wg0.conf
+          sudo tee /etc/wireguard/wg0.conf > /dev/null <<EOF
+          [Interface]
+          PrivateKey = $SERVER_PRIV
+          Address = 10.0.0.1/24
+          ListenPort = 1194
+          PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+          PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+          [Peer]
+          PublicKey = $CLIENT_PUB
+          AllowedIPs = 10.0.0.2/32
+          EOF
+          
+          # 生成客户端配置模板（先占位 NGROK_ADDR）
+          tee client.conf > /dev/null <<EOF
+          [Interface]
+          PrivateKey = $CLIENT_PRIV
+          Address = 10.0.0.2/24
+          DNS = 8.8.8.8
+          [Peer]
+          PublicKey = $SERVER_PUB
+          Endpoint = NGROK_ADDR:1194
+          AllowedIPs = 0.0.0.0/0
+          PersistentKeepalive = 25
+          EOF
 
-      - name: Start Cloudflare Tunnel & Get Temp Domain
+      - name: Start WireGuard service
         run: |
-          # 后台启动隧道，转发SSH 22端口，输出日志到文件
-          nohup cloudflared tunnel --url tcp://localhost:22 > tunnel.log 2>&1 &
-          sleep 15  # 等待隧道建立连接
-          # 提取临时域名（格式：https://xxxx.trycloudflare.com）
-          TEMP_DOMAIN=$(grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' tunnel.log | head -n1)
-          # 输出连接信息
-          echo -e "\n===== SSH 连接信息 =====\n"
-          echo "临时域名: $TEMP_DOMAIN"
-          echo "用户名: sshuser"
-          echo "密码: TempSSH@123456"
-          echo -e "\nTermux连接命令:\n"
-          echo "ssh sshuser@localhost -o ProxyCommand='cloudflared access ssh --hostname $TEMP_DOMAIN'"
-          echo -e "\n========================\n"
+          sudo wg-quick up wg0
+          sudo sysctl -w net.ipv4.ip_forward=1
+          sudo wg show wg0
 
-      - name: Keep Workflow Running
+      - name: Expose VPN port via ngrok v3
+        env:
+          NGROK_AUTH: ${{ secrets.NGROK_AUTH }}
         run: |
-          sleep 35000  # 免费版最长运行约6小时
+          # ngrok v3 认证语法
+          ngrok config add-authtoken $NGROK_AUTH
+          # 后台启动 ngrok UDP 穿透（v3 支持 UDP）
+          nohup ngrok udp 1194 &
+          sleep 10  # 等待 ngrok 建立连接
+          # 获取 ngrok 公网地址和端口
+          NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
+          # 提取地址和端口（格式为 udp://xxx.ngrok.io:端口）
+          NGROK_ADDR=$(echo $NGROK_URL | cut -d'/' -f3 | cut -d':' -f1)
+          NGROK_PORT=$(echo $NGROK_URL | cut -d'/' -f3 | cut -d':' -f2)
+          echo "Ngrok Public Address: $NGROK_ADDR:$NGROK_PORT"
+          # 替换客户端配置中的占位符（端口也要替换，v3 随机端口）
+          sed -i "s/NGROK_ADDR:1194/$NGROK_ADDR:$NGROK_PORT/g" client.conf
+          # 输出客户端配置文本（方便复制）
+          echo -e "\n===== WireGuard 客户端配置开始 ====="
+          cat client.conf
+          echo -e "===== WireGuard 客户端配置结束 =====\n"
+
+      - name: Keep workflow running
+        run: |
+          sleep 35000  # 接近免费版 6 小时运行上限
