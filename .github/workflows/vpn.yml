@@ -1,87 +1,56 @@
-name: Temporary WireGuard VPN Server
+name: Temporary SSH Server
 on:
   workflow_dispatch:  # 手动触发工作流
 
 jobs:
-  deploy-vpn-server:
+  deploy-ssh-server:
     runs-on: ubuntu-latest
     steps:
-      - name: Install required dependencies
+      - name: Install SSH & ngrok
         run: |
-          sudo apt update && sudo apt install -y wireguard jq
-          # 下载 ngrok v3（支持 UDP 协议）
+          # 安装 SSH 服务
+          sudo apt update && sudo apt install -y openssh-server jq
+          # 安装 ngrok v3（支持 TCP 穿透）
           wget https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
           tar -xvzf ngrok-v3-stable-linux-amd64.tgz
           sudo mv ngrok /usr/local/bin/
           chmod +x /usr/local/bin/ngrok
 
-      - name: Generate WireGuard key pair and config
+      - name: Configure SSH Server
         run: |
-          # 生成服务端密钥
-          sudo mkdir -p /etc/wireguard
-          wg genkey | sudo tee /etc/wireguard/server_private.key | wg pubkey | sudo tee /etc/wireguard/server_public.key
-          wg genkey | sudo tee /etc/wireguard/client_private.key | wg pubkey | sudo tee /etc/wireguard/client_public.key
-          
-          # 读取密钥内容
-          SERVER_PRIV=$(sudo cat /etc/wireguard/server_private.key)
-          SERVER_PUB=$(sudo cat /etc/wireguard/server_public.key)
-          CLIENT_PRIV=$(sudo cat /etc/wireguard/client_private.key)
-          CLIENT_PUB=$(sudo cat /etc/wireguard/client_public.key)
-          
-          # 配置服务端 wg0.conf
-          sudo tee /etc/wireguard/wg0.conf > /dev/null <<EOF
-          [Interface]
-          PrivateKey = $SERVER_PRIV
-          Address = 10.0.0.1/24
-          ListenPort = 1194
-          PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-          PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
-          [Peer]
-          PublicKey = $CLIENT_PUB
-          AllowedIPs = 10.0.0.2/32
-          EOF
-          
-          # 生成客户端配置模板（先占位 NGROK_ADDR）
-          tee client.conf > /dev/null <<EOF
-          [Interface]
-          PrivateKey = $CLIENT_PRIV
-          Address = 10.0.0.2/24
-          DNS = 8.8.8.8
-          [Peer]
-          PublicKey = $SERVER_PUB
-          Endpoint = NGROK_ADDR:1194
-          AllowedIPs = 0.0.0.0/0
-          PersistentKeepalive = 25
-          EOF
+          # 设置 root 密码（可自定义，建议用 GitHub Secrets 存储）
+          sudo echo "root:TempSSH@123456" | chpasswd
+          # 修改 SSH 配置，允许 root 密码登录
+          sudo sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          # 启动 SSH 服务
+          sudo service ssh start
+          # 检查 SSH 状态
+          sudo service ssh status
 
-      - name: Start WireGuard service
-        run: |
-          sudo wg-quick up wg0
-          sudo sysctl -w net.ipv4.ip_forward=1
-          sudo wg show wg0
-
-      - name: Expose VPN port via ngrok v3
+      - name: Expose SSH port via ngrok
         env:
           NGROK_AUTH: ${{ secrets.NGROK_AUTH }}
         run: |
-          # ngrok v3 认证语法
+          # 配置 ngrok 认证
           ngrok config add-authtoken $NGROK_AUTH
-          # 后台启动 ngrok UDP 穿透（v3 支持 UDP）
-          nohup ngrok udp 1194 &
+          # 后台启动 ngrok TCP 穿透（映射 SSH 22 端口）
+          nohup ngrok tcp 22 &
           sleep 10  # 等待 ngrok 建立连接
           # 获取 ngrok 公网地址和端口
           NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
-          # 提取地址和端口（格式为 udp://xxx.ngrok.io:端口）
-          NGROK_ADDR=$(echo $NGROK_URL | cut -d'/' -f3 | cut -d':' -f1)
-          NGROK_PORT=$(echo $NGROK_URL | cut -d'/' -f3 | cut -d':' -f2)
-          echo "Ngrok Public Address: $NGROK_ADDR:$NGROK_PORT"
-          # 替换客户端配置中的占位符（端口也要替换，v3 随机端口）
-          sed -i "s/NGROK_ADDR:1194/$NGROK_ADDR:$NGROK_PORT/g" client.conf
-          # 输出客户端配置文本（方便复制）
-          echo -e "\n===== WireGuard 客户端配置开始 ====="
-          cat client.conf
-          echo -e "===== WireGuard 客户端配置结束 =====\n"
+          SSH_HOST=$(echo $NGROK_URL | cut -d'/' -f3 | cut -d':' -f1)
+          SSH_PORT=$(echo $NGROK_URL | cut -d'/' -f3 | cut -d':' -f2)
+          # 输出连接信息
+          echo -e "\n===== SSH 连接信息 =====\n"
+          echo "服务器地址: $SSH_HOST"
+          echo "端口号: $SSH_PORT"
+          echo "用户名: root"
+          echo "密码: TempSSH@123456"
+          echo -e "\n===== 连接命令（Termux 直接用）=====\n"
+          echo "ssh root@$SSH_HOST -p $SSH_PORT"
+          echo -e "\n====================================\n"
 
       - name: Keep workflow running
         run: |
-          sleep 35000  # 接近免费版 6 小时运行上限
+          sleep 35000  # 免费版最长运行 6 小时
