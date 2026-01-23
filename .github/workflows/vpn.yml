@@ -1,67 +1,84 @@
-name: Temporary VPN Server
+name: Temporary WireGuard VPN Server
 on:
-  workflow_dispatch: # 手动触发工作流
+  workflow_dispatch:  # 手动触发工作流
 
 jobs:
-  deploy-vpn:
+  deploy-vpn-server:
     runs-on: ubuntu-latest
     steps:
-      - name: Install dependencies
+      - name: Install required dependencies
         run: |
-          sudo apt update && sudo apt install -y wireguard qrencode
-          # 安装 ngrok
-          wget https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
-          tar -xvzf ngrok-v3-stable-linux-amd64.tgz
+          sudo apt update && sudo apt install -y wireguard jq
+          # 下载 ngrok v2（适配 authtoken 单独执行的语法）
+          wget https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-linux-amd64.zip
+          unzip ngrok-stable-linux-amd64.zip
           sudo mv ngrok /usr/local/bin/
+          chmod +x /usr/local/bin/ngrok
 
-      - name: Configure WireGuard
+      - name: Generate WireGuard key pair and config
         run: |
-          # 生成密钥对
-          wg genkey | sudo tee /etc/wireguard/privatekey | wg pubkey | sudo tee /etc/wireguard/publickey
-          PRIVKEY=$(sudo cat /etc/wireguard/privatekey)
-          PUBKEY=$(sudo cat /etc/wireguard/publickey)
-          # 配置服务端
+          # 生成服务端密钥
+          sudo mkdir -p /etc/wireguard
+          wg genkey | sudo tee /etc/wireguard/server_private.key | wg pubkey | sudo tee /etc/wireguard/server_public.key
+          wg genkey | sudo tee /etc/wireguard/client_private.key | wg pubkey | sudo tee /etc/wireguard/client_public.key
+          
+          # 读取密钥内容
+          SERVER_PRIV=$(sudo cat /etc/wireguard/server_private.key)
+          SERVER_PUB=$(sudo cat /etc/wireguard/server_public.key)
+          CLIENT_PRIV=$(sudo cat /etc/wireguard/client_private.key)
+          CLIENT_PUB=$(sudo cat /etc/wireguard/client_public.key)
+          
+          # 配置服务端 wg0.conf
           sudo tee /etc/wireguard/wg0.conf > /dev/null <<EOF
           [Interface]
-          PrivateKey = $PRIVKEY
+          PrivateKey = $SERVER_PRIV
           Address = 10.0.0.1/24
           ListenPort = 1194
           PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
           PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
           [Peer]
-          PublicKey = $PUBKEY
+          PublicKey = $CLIENT_PUB
           AllowedIPs = 10.0.0.2/32
           EOF
-          # 生成客户端配置
-          sudo tee client.conf > /dev/null <<EOF
+          
+          # 生成客户端配置模板（先占位 NGROK_ADDR）
+          tee client.conf > /dev/null <<EOF
           [Interface]
-          PrivateKey = $PRIVKEY
+          PrivateKey = $CLIENT_PRIV
           Address = 10.0.0.2/24
           DNS = 8.8.8.8
           [Peer]
-          PublicKey = $PUBKEY
+          PublicKey = $SERVER_PUB
           Endpoint = NGROK_ADDR:1194
           AllowedIPs = 0.0.0.0/0
+          PersistentKeepalive = 25
           EOF
 
-      - name: Start WireGuard
+      - name: Start WireGuard service
         run: |
           sudo wg-quick up wg0
           sudo sysctl -w net.ipv4.ip_forward=1
+          sudo wg show wg0
 
-      - name: Expose via ngrok
+      - name: Expose VPN port via ngrok
         env:
-          NGROK_AUTH: ${{ secrets.NGROK_AUTH }} # 需在 GitHub Secrets 配置 ngrok 密钥
+          NGROK_AUTH: ${{ secrets.NGROK_AUTH }}
         run: |
-          nohup ngrok udp 1194 --authtoken $NGROK_AUTH &
-          sleep 10
-          # 获取 ngrok 映射地址
+          # 先配置 ngrok 认证（v2 语法）
+          ngrok authtoken $NGROK_AUTH
+          # 后台启动 ngrok UDP 穿透
+          nohup ngrok udp 1194 &
+          sleep 10  # 等待 ngrok 建立连接
+          # 获取 ngrok 公网地址
           NGROK_ADDR=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url' | cut -d'/' -f3 | cut -d':' -f1)
-          # 替换客户端配置中的地址
+          echo "Ngrok Public Address: $NGROK_ADDR"
+          # 替换客户端配置中的占位符
           sed -i "s/NGROK_ADDR/$NGROK_ADDR/g" client.conf
-          # 生成二维码方便手机扫码导入
-          qrencode -t ANSIUTF8 < client.conf
+          # 输出客户端配置文本（方便复制）
+          echo -e "\n===== WireGuard 客户端配置开始 ====="
+          cat client.conf
+          echo -e "===== WireGuard 客户端配置结束 =====\n"
 
       - name: Keep workflow running
         run: |
-          sleep 35000 # 接近免费版 6 小时上限
+          sleep 35000  # 接近免费版 6 小时运行上限
