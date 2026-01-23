@@ -1,53 +1,56 @@
-name: Temporary SSH Server
+name: Temporary SSH Server (frp)
 on:
-  workflow_dispatch:  # 手动触发工作流
+  workflow_dispatch:
 
 jobs:
   deploy-ssh-server:
     runs-on: ubuntu-latest
     steps:
-      - name: Install SSH & ngrok
+      - name: Install SSH & frp
         run: |
+          # 安装 SSH 服务
           sudo apt update && sudo apt install -y openssh-server jq
-          # 安装 ngrok v3
-          wget https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
-          tar -xvzf ngrok-v3-stable-linux-amd64.tgz
-          sudo mv ngrok /usr/local/bin/
-          chmod +x /usr/local/bin/ngrok
+          # 下载 frp 客户端（Linux amd64）
+          wget https://github.com/fatedier/frp/releases/download/v0.52.3/frp_0.52.3_linux_amd64.tar.gz
+          tar -xvzf frp_0.52.3_linux_amd64.tar.gz
+          cd frp_0.52.3_linux_amd64
+          sudo cp frpc /usr/local/bin/
 
-      - name: Configure SSH Server (普通用户方案)
+      - name: Configure SSH Server
         run: |
-          # 创建普通用户，避免 root 权限限制
+          # 创建普通用户
           sudo useradd -m sshuser
           echo "sshuser:TempSSH@123456" | sudo chpasswd
-          # 授予 sudo 权限（可选）
           sudo usermod -aG sudo sshuser
-          # 修改 SSH 配置，允许密码登录
-          sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
-          sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
-          # 重启 SSH 服务
+          # 开启密码登录
+          sudo sed -i -e 's/#PasswordAuthentication yes/PasswordAuthentication yes/' -e 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
           sudo service ssh restart
-          sudo service ssh status
 
-      - name: Expose SSH port via ngrok
-        env:
-          NGROK_AUTH: ${{ secrets.NGROK_AUTH }}
+      - name: Configure frp Client
         run: |
-          ngrok config add-authtoken $NGROK_AUTH
-          nohup ngrok tcp 22 &
-          sleep 10
-          # 获取映射地址
-          NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
-          SSH_HOST=$(echo $NGROK_URL | cut -d'/' -f3 | cut -d':' -f1)
-          SSH_PORT=$(echo $NGROK_URL | cut -d'/' -f3 | cut -d':' -f2)
+          # 写入 frp 配置（使用免费公共 frp 服务器，可自行替换）
+          cat > ~/frpc.ini << EOF
+          [common]
+          server_addr = freefrp.net
+          server_port = 7000
+
+          [ssh]
+          type = tcp
+          local_ip = 127.0.0.1
+          local_port = 22
+          remote_port = 60001
+          EOF
+          # 后台启动 frp 客户端
+          nohup frpc -c ~/frpc.ini &
+          sleep 5
           # 输出连接信息
           echo -e "\n===== SSH 连接信息 =====\n"
-          echo "服务器地址: $SSH_HOST"
-          echo "端口号: $SSH_PORT"
+          echo "服务器地址: freefrp.net"
+          echo "端口号: 60001"
           echo "用户名: sshuser"
           echo "密码: TempSSH@123456"
-          echo -e "\n连接命令: ssh sshuser@$SSH_HOST -p $SSH_PORT\n"
+          echo -e "\n连接命令: ssh sshuser@freefrp.net -p 60001\n"
 
       - name: Keep workflow running
         run: |
-          sleep 35000  # 接近 6 小时上限
+          sleep 35000
