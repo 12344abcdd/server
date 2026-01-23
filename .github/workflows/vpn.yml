@@ -9,9 +9,9 @@ jobs:
       - name: Install required dependencies
         run: |
           sudo apt update && sudo apt install -y wireguard jq
-          # 下载 ngrok v2（适配 authtoken 单独执行的语法）
-          wget https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-linux-amd64.zip
-          unzip ngrok-stable-linux-amd64.zip
+          # 下载 ngrok v3（支持 UDP 协议）
+          wget https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
+          tar -xvzf ngrok-v3-stable-linux-amd64.tgz
           sudo mv ngrok /usr/local/bin/
           chmod +x /usr/local/bin/ngrok
 
@@ -60,20 +60,23 @@ jobs:
           sudo sysctl -w net.ipv4.ip_forward=1
           sudo wg show wg0
 
-      - name: Expose VPN port via ngrok
+      - name: Expose VPN port via ngrok v3
         env:
           NGROK_AUTH: ${{ secrets.NGROK_AUTH }}
         run: |
-          # 先配置 ngrok 认证（v2 语法）
-          ngrok authtoken $NGROK_AUTH
-          # 后台启动 ngrok UDP 穿透
+          # ngrok v3 认证语法
+          ngrok config add-authtoken $NGROK_AUTH
+          # 后台启动 ngrok UDP 穿透（v3 支持 UDP）
           nohup ngrok udp 1194 &
           sleep 10  # 等待 ngrok 建立连接
-          # 获取 ngrok 公网地址
-          NGROK_ADDR=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url' | cut -d'/' -f3 | cut -d':' -f1)
-          echo "Ngrok Public Address: $NGROK_ADDR"
-          # 替换客户端配置中的占位符
-          sed -i "s/NGROK_ADDR/$NGROK_ADDR/g" client.conf
+          # 获取 ngrok 公网地址和端口
+          NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
+          # 提取地址和端口（格式为 udp://xxx.ngrok.io:端口）
+          NGROK_ADDR=$(echo $NGROK_URL | cut -d'/' -f3 | cut -d':' -f1)
+          NGROK_PORT=$(echo $NGROK_URL | cut -d'/' -f3 | cut -d':' -f2)
+          echo "Ngrok Public Address: $NGROK_ADDR:$NGROK_PORT"
+          # 替换客户端配置中的占位符（端口也要替换，v3 随机端口）
+          sed -i "s/NGROK_ADDR:1194/$NGROK_ADDR:$NGROK_PORT/g" client.conf
           # 输出客户端配置文本（方便复制）
           echo -e "\n===== WireGuard 客户端配置开始 ====="
           cat client.conf
