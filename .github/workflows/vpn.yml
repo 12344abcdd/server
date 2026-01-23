@@ -1,24 +1,15 @@
-name: Temporary SSH Server (frp)
+name: Temporary SSH via Cloudflare Tunnel
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # 手动触发工作流
 
 jobs:
-  deploy-ssh-server:
+  deploy-ssh-tunnel:
     runs-on: ubuntu-latest
     steps:
-      - name: Install SSH & frp
+      - name: Install SSH Server
         run: |
-          # 安装 SSH 服务
-          sudo apt update && sudo apt install -y openssh-server jq
-          # 下载 frp 客户端（Linux amd64）
-          wget https://github.com/fatedier/frp/releases/download/v0.52.3/frp_0.52.3_linux_amd64.tar.gz
-          tar -xvzf frp_0.52.3_linux_amd64.tar.gz
-          cd frp_0.52.3_linux_amd64
-          sudo cp frpc /usr/local/bin/
-
-      - name: Configure SSH Server
-        run: |
-          # 创建普通用户
+          sudo apt update -y && sudo apt install -y openssh-server jq
+          # 创建普通用户，避免root权限限制
           sudo useradd -m sshuser
           echo "sshuser:TempSSH@123456" | sudo chpasswd
           sudo usermod -aG sudo sshuser
@@ -26,31 +17,29 @@ jobs:
           sudo sed -i -e 's/#PasswordAuthentication yes/PasswordAuthentication yes/' -e 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
           sudo service ssh restart
 
-      - name: Configure frp Client
+      - name: Install Cloudflared
         run: |
-          # 写入 frp 配置（使用免费公共 frp 服务器，可自行替换）
-          cat > ~/frpc.ini << EOF
-          [common]
-          server_addr = freefrp.net
-          server_port = 7000
+          # 下载并安装 cloudflared
+          wget https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O cloudflared
+          chmod +x cloudflared
+          sudo mv cloudflared /usr/local/bin/
 
-          [ssh]
-          type = tcp
-          local_ip = 127.0.0.1
-          local_port = 22
-          remote_port = 60001
-          EOF
-          # 后台启动 frp 客户端
-          nohup frpc -c ~/frpc.ini &
-          sleep 5
+      - name: Start Cloudflare Tunnel & Get Temp Domain
+        run: |
+          # 后台启动隧道，转发SSH 22端口，输出日志到文件
+          nohup cloudflared tunnel --url tcp://localhost:22 > tunnel.log 2>&1 &
+          sleep 15  # 等待隧道建立连接
+          # 提取临时域名（格式：https://xxxx.trycloudflare.com）
+          TEMP_DOMAIN=$(grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' tunnel.log | head -n1)
           # 输出连接信息
           echo -e "\n===== SSH 连接信息 =====\n"
-          echo "服务器地址: freefrp.net"
-          echo "端口号: 60001"
+          echo "临时域名: $TEMP_DOMAIN"
           echo "用户名: sshuser"
           echo "密码: TempSSH@123456"
-          echo -e "\n连接命令: ssh sshuser@freefrp.net -p 60001\n"
+          echo -e "\nTermux连接命令:\n"
+          echo "ssh sshuser@localhost -o ProxyCommand='cloudflared access ssh --hostname $TEMP_DOMAIN'"
+          echo -e "\n========================\n"
 
-      - name: Keep workflow running
+      - name: Keep Workflow Running
         run: |
-          sleep 35000
+          sleep 35000  # 免费版最长运行约6小时
