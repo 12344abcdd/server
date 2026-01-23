@@ -1,0 +1,67 @@
+name: Temporary VPN Server
+on:
+  workflow_dispatch: # 手动触发工作流
+
+jobs:
+  deploy-vpn:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt update && sudo apt install -y wireguard qrencode
+          # 安装 ngrok
+          wget https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
+          tar -xvzf ngrok-v3-stable-linux-amd64.tgz
+          sudo mv ngrok /usr/local/bin/
+
+      - name: Configure WireGuard
+        run: |
+          # 生成密钥对
+          wg genkey | sudo tee /etc/wireguard/privatekey | wg pubkey | sudo tee /etc/wireguard/publickey
+          PRIVKEY=$(sudo cat /etc/wireguard/privatekey)
+          PUBKEY=$(sudo cat /etc/wireguard/publickey)
+          # 配置服务端
+          sudo tee /etc/wireguard/wg0.conf > /dev/null <<EOF
+          [Interface]
+          PrivateKey = $PRIVKEY
+          Address = 10.0.0.1/24
+          ListenPort = 1194
+          PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+          PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+          [Peer]
+          PublicKey = $PUBKEY
+          AllowedIPs = 10.0.0.2/32
+          EOF
+          # 生成客户端配置
+          sudo tee client.conf > /dev/null <<EOF
+          [Interface]
+          PrivateKey = $PRIVKEY
+          Address = 10.0.0.2/24
+          DNS = 8.8.8.8
+          [Peer]
+          PublicKey = $PUBKEY
+          Endpoint = NGROK_ADDR:1194
+          AllowedIPs = 0.0.0.0/0
+          EOF
+
+      - name: Start WireGuard
+        run: |
+          sudo wg-quick up wg0
+          sudo sysctl -w net.ipv4.ip_forward=1
+
+      - name: Expose via ngrok
+        env:
+          NGROK_AUTH: ${{ secrets.NGROK_AUTH }} # 需在 GitHub Secrets 配置 ngrok 密钥
+        run: |
+          nohup ngrok udp 1194 --authtoken $NGROK_AUTH &
+          sleep 10
+          # 获取 ngrok 映射地址
+          NGROK_ADDR=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url' | cut -d'/' -f3 | cut -d':' -f1)
+          # 替换客户端配置中的地址
+          sed -i "s/NGROK_ADDR/$NGROK_ADDR/g" client.conf
+          # 生成二维码方便手机扫码导入
+          qrencode -t ANSIUTF8 < client.conf
+
+      - name: Keep workflow running
+        run: |
+          sleep 35000 # 接近免费版 6 小时上限
