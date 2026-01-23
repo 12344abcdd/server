@@ -8,36 +8,35 @@ jobs:
     steps:
       - name: Install SSH & ngrok
         run: |
-          # 安装 SSH 服务
           sudo apt update && sudo apt install -y openssh-server jq
-          # 安装 ngrok v3（支持 TCP 穿透）
+          # 安装 ngrok v3
           wget https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
           tar -xvzf ngrok-v3-stable-linux-amd64.tgz
           sudo mv ngrok /usr/local/bin/
           chmod +x /usr/local/bin/ngrok
 
-      - name: Configure SSH Server
+      - name: Configure SSH Server (普通用户方案)
         run: |
-          # 设置 root 密码（可自定义，建议用 GitHub Secrets 存储）
-          sudo echo "root:TempSSH@123456" | chpasswd
-          # 修改 SSH 配置，允许 root 密码登录
-          sudo sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
+          # 创建普通用户，避免 root 权限限制
+          sudo useradd -m sshuser
+          echo "sshuser:TempSSH@123456" | sudo chpasswd
+          # 授予 sudo 权限（可选）
+          sudo usermod -aG sudo sshuser
+          # 修改 SSH 配置，允许密码登录
+          sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
           sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
-          # 启动 SSH 服务
-          sudo service ssh start
-          # 检查 SSH 状态
+          # 重启 SSH 服务
+          sudo service ssh restart
           sudo service ssh status
 
       - name: Expose SSH port via ngrok
         env:
           NGROK_AUTH: ${{ secrets.NGROK_AUTH }}
         run: |
-          # 配置 ngrok 认证
           ngrok config add-authtoken $NGROK_AUTH
-          # 后台启动 ngrok TCP 穿透（映射 SSH 22 端口）
           nohup ngrok tcp 22 &
-          sleep 10  # 等待 ngrok 建立连接
-          # 获取 ngrok 公网地址和端口
+          sleep 10
+          # 获取映射地址
           NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
           SSH_HOST=$(echo $NGROK_URL | cut -d'/' -f3 | cut -d':' -f1)
           SSH_PORT=$(echo $NGROK_URL | cut -d'/' -f3 | cut -d':' -f2)
@@ -45,12 +44,10 @@ jobs:
           echo -e "\n===== SSH 连接信息 =====\n"
           echo "服务器地址: $SSH_HOST"
           echo "端口号: $SSH_PORT"
-          echo "用户名: root"
+          echo "用户名: sshuser"
           echo "密码: TempSSH@123456"
-          echo -e "\n===== 连接命令（Termux 直接用）=====\n"
-          echo "ssh root@$SSH_HOST -p $SSH_PORT"
-          echo -e "\n====================================\n"
+          echo -e "\n连接命令: ssh sshuser@$SSH_HOST -p $SSH_PORT\n"
 
       - name: Keep workflow running
         run: |
-          sleep 35000  # 免费版最长运行 6 小时
+          sleep 35000  # 接近 6 小时上限
