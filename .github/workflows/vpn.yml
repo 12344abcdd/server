@@ -1,4 +1,4 @@
-name: Temporary WireGuard VPN Server (Pinggy UDP)
+name: Temporary WireGuard VPN Server (Pinggy UDP Fix)
 on:
   workflow_dispatch:
 
@@ -9,7 +9,7 @@ jobs:
       - name: Install required dependencies
         run: |
           sudo apt update && sudo apt install -y wireguard jq socat openssh-client
-          
+
       - name: Generate WireGuard key pair and config
         run: |
           sudo mkdir -p /etc/wireguard
@@ -28,11 +28,12 @@ jobs:
           PrivateKey = $SERVER_PRIV
           Address = 10.0.0.1/24
           ListenPort = 1194
-          PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o $DEFAULT_IFACE -j MASQUERADE
-          PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o $DEFAULT_IFACE -j MASQUERADE
+          PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o $DEFAULT_IFACE -j MASQUERADE; ufw allow 1194/udp
+          PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o $DEFAULT_IFACE -j MASQUERADE; ufw delete allow 1194/udp
           [Peer]
           PublicKey = $CLIENT_PUB
           AllowedIPs = 10.0.0.2/32
+          PersistentKeepalive = 25
           EOF
           
           tee client.conf > /dev/null <<EOF
@@ -47,33 +48,45 @@ jobs:
           PersistentKeepalive = 25
           EOF
 
-      - name: Start WireGuard service
+      - name: Start WireGuard service & fix network forward
         run: |
-          sudo wg-quick up wg0
+          # 强制开启 IP 转发并持久化
           sudo sysctl -w net.ipv4.ip_forward=1
+          echo "net.ipv4.ip_forward=1" | sudo tee -a /etc/sysctl.conf
           sudo sysctl -p
+          
+          # 关闭并清空防火墙规则（兜底）
+          sudo ufw disable
+          sudo iptables -F
+          sudo iptables -t nat -F
+          
+          # 启动 WireGuard 并验证状态
+          sudo wg-quick up wg0
           sudo wg show wg0
+          echo "=== 网卡转发状态 ==="
+          cat /proc/sys/net/ipv4/ip_forward
+          echo "=== iptables NAT 规则 ==="
+          sudo iptables -t nat -L POSTROUTING -n
 
       - name: Expose VPN port via Pinggy free UDP tunnel
         run: |
-          # 关键修复：跳过 SSH 主机密钥验证
           mkdir -p ~/.ssh
           echo "Host a.pinggy.io" >> ~/.ssh/config
           echo "  StrictHostKeyChecking no" >> ~/.ssh/config
           echo "  UserKnownHostsFile /dev/null" >> ~/.ssh/config
           
-          # 后台启动 Pinggy UDP 穿透，添加 -T 禁用伪终端分配
+          # 启动隧道并输出实时日志
           nohup ssh -T -p 443 -R0:localhost:1194 udp@a.pinggy.io > pinggy.log 2>&1 &
-          sleep 20  # 延长等待时间，确保连接建立
+          sleep 25
           
-          # 提取公网地址
+          # 双重验证 Pinggy 地址
           PINGGY_ADDR=$(grep -o 'udp://.*:[0-9]*' pinggy.log | head -n1 | cut -d'/' -f3)
           if [ -z "$PINGGY_ADDR" ]; then
-              echo "Error: Pinggy 穿透失败，日志内容如下："
+              echo "=== Pinggy 启动失败，日志内容 ==="
               cat pinggy.log
               exit 1
           fi
-          echo "Pinggy Public UDP Address: $PINGGY_ADDR"
+          echo "✅ Pinggy 公网地址: $PINGGY_ADDR"
           
           sed -i "s/PINGGY_ADDR/$PINGGY_ADDR/g" client.conf
           
@@ -81,6 +94,11 @@ jobs:
           cat client.conf
           echo -e "===== WireGuard 客户端配置结束 =====\n"
 
-      - name: Keep workflow running
+      - name: Monitor WireGuard handshake (关键修复)
         run: |
+          echo "=== 等待客户端连接，实时监控握手状态 ==="
+          while true; do
+              sudo wg show wg0 latest-handshakes
+              sleep 10
+          done &
           sleep 35000
