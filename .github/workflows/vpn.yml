@@ -1,4 +1,4 @@
-name: Temporary WireGuard VPN Server
+name: Temporary WireGuard VPN Server (Pinggy UDP)
 on:
   workflow_dispatch:  # 手动触发工作流
 
@@ -8,13 +8,8 @@ jobs:
     steps:
       - name: Install required dependencies
         run: |
-          sudo apt update && sudo apt install -y wireguard jq
-          # 下载 ngrok v3（支持 UDP 协议）
-          wget https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
-          tar -xvzf ngrok-v3-stable-linux-amd64.tgz
-          sudo mv ngrok /usr/local/bin/
-          chmod +x /usr/local/bin/ngrok
-
+          sudo apt update && sudo apt install -y wireguard jq socat openssh-client
+          
       - name: Generate WireGuard key pair and config
         run: |
           # 生成服务端密钥
@@ -28,20 +23,23 @@ jobs:
           CLIENT_PRIV=$(sudo cat /etc/wireguard/client_private.key)
           CLIENT_PUB=$(sudo cat /etc/wireguard/client_public.key)
           
+          # 自动识别网卡名称
+          DEFAULT_IFACE=$(ip route get 1.1.1.1 | awk '{print $5; exit}')
+          
           # 配置服务端 wg0.conf
           sudo tee /etc/wireguard/wg0.conf > /dev/null <<EOF
           [Interface]
           PrivateKey = $SERVER_PRIV
           Address = 10.0.0.1/24
           ListenPort = 1194
-          PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-          PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+          PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o $DEFAULT_IFACE -j MASQUERADE
+          PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o $DEFAULT_IFACE -j MASQUERADE
           [Peer]
           PublicKey = $CLIENT_PUB
           AllowedIPs = 10.0.0.2/32
           EOF
           
-          # 生成客户端配置模板（先占位 NGROK_ADDR）
+          # 生成客户端配置模板（占位符 PINGGY_ADDR）
           tee client.conf > /dev/null <<EOF
           [Interface]
           PrivateKey = $CLIENT_PRIV
@@ -49,7 +47,7 @@ jobs:
           DNS = 8.8.8.8
           [Peer]
           PublicKey = $SERVER_PUB
-          Endpoint = NGROK_ADDR:1194
+          Endpoint = PINGGY_ADDR
           AllowedIPs = 0.0.0.0/0
           PersistentKeepalive = 25
           EOF
@@ -58,30 +56,32 @@ jobs:
         run: |
           sudo wg-quick up wg0
           sudo sysctl -w net.ipv4.ip_forward=1
+          sudo sysctl -p
           sudo wg show wg0
 
-      - name: Expose VPN port via ngrok v3
-        env:
-          NGROK_AUTH: ${{ secrets.NGROK_AUTH }}
+      - name: Expose VPN port via Pinggy free UDP tunnel
         run: |
-          # ngrok v3 认证语法
-          ngrok config add-authtoken $NGROK_AUTH
-          # 后台启动 ngrok UDP 穿透（v3 支持 UDP）
-          nohup ngrok udp 1194 &
-          sleep 10  # 等待 ngrok 建立连接
-          # 获取 ngrok 公网地址和端口
-          NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
-          # 提取地址和端口（格式为 udp://xxx.ngrok.io:端口）
-          NGROK_ADDR=$(echo $NGROK_URL | cut -d'/' -f3 | cut -d':' -f1)
-          NGROK_PORT=$(echo $NGROK_URL | cut -d'/' -f3 | cut -d':' -f2)
-          echo "Ngrok Public Address: $NGROK_ADDR:$NGROK_PORT"
-          # 替换客户端配置中的占位符（端口也要替换，v3 随机端口）
-          sed -i "s/NGROK_ADDR:1194/$NGROK_ADDR:$NGROK_PORT/g" client.conf
-          # 输出客户端配置文本（方便复制）
+          # 后台启动 Pinggy UDP 穿透，转发 1194 端口
+          nohup ssh -p 443 -R0:localhost:1194 udp@a.pinggy.io > pinggy.log 2>&1 &
+          sleep 15  # 等待连接建立
+          
+          # 从日志提取公网 UDP 地址
+          PINGGY_ADDR=$(grep -o 'udp://.*:[0-9]*' pinggy.log | head -n1 | cut -d'/' -f3)
+          if [ -z "$PINGGY_ADDR" ]; then
+              echo "Error: Pinggy 穿透失败，请重试"
+              cat pinggy.log
+              exit 1
+          fi
+          echo "Pinggy Public UDP Address: $PINGGY_ADDR"
+          
+          # 替换客户端配置占位符
+          sed -i "s/PINGGY_ADDR/$PINGGY_ADDR/g" client.conf
+          
+          # 输出客户端配置
           echo -e "\n===== WireGuard 客户端配置开始 ====="
           cat client.conf
           echo -e "===== WireGuard 客户端配置结束 =====\n"
 
       - name: Keep workflow running
         run: |
-          sleep 35000  # 接近免费版 6 小时运行上限
+          sleep 35000  # 免费版 GitHub Actions 最长运行 6 小时
